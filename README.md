@@ -28,6 +28,10 @@ Dependencies are pinned as git submodules in `lib/`. Clone with submodules enabl
 git clone --recurse-submodules https://github.com/revert-finance/ekubo-utils.git
 ```
 
+Security reviewers should read [AUDIT_CONTEXT.md](AUDIT_CONTEXT.md) for the
+threat model, trust boundaries, invariants, accepted limitations, and expected
+audit output.
+
 ## Direct NFT actions
 
 An NFT owner can invoke either position-management mode without approving an ERC-721 operator:
