@@ -18,6 +18,7 @@ abstract contract RouterSwapper {
     error SameToken();
     error SlippageError();
     error SwapFailed();
+    error SwapInflowDetected();
     error SwapInputExceeded();
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
@@ -70,10 +71,14 @@ abstract contract RouterSwapper {
             )
         }
 
+        uint256 routerBalanceInBefore;
         if (isUniversalRouter) {
             (address target, bytes memory routerData) = abi.decode(swapData, (address, bytes));
             if (target != universalRouter) revert InvalidSwapRouter();
             UniversalRouterData memory data = abi.decode(routerData, (UniversalRouterData));
+            // Snapshot what the router already holds: the command sequence must only spend
+            // input funded by this call (amounts swept back here are credited below).
+            routerBalanceInBefore = params.tokenIn.balanceOf(target);
             params.tokenIn.safeTransfer(target, params.amountIn);
             IUniversalRouter(target).execute(data.commands, data.inputs, data.deadline);
         } else {
@@ -81,12 +86,28 @@ abstract contract RouterSwapper {
             params.tokenIn.forceApprove(zeroxAllowanceHolder, params.amountIn);
             (bool success,) = zeroxAllowanceHolder.call(swapData);
             if (!success) revert SwapFailed();
+            // All authorized consumption of tokenIn is allowance-mediated, so the remaining
+            // allowance measures the true spend. Requiring the source balance to match it
+            // exactly rejects any third-party tokenIn inflow arriving during the call.
+            uint256 allowanceSpent = params.amountIn - params.tokenIn.allowance(address(this), zeroxAllowanceHolder);
             params.tokenIn.forceApprove(zeroxAllowanceHolder, 0);
+            if (params.tokenIn.balanceOf(address(this)) != balanceInBefore - allowanceSpent) {
+                revert SwapInflowDetected();
+            }
         }
 
         uint256 balanceInAfter = params.tokenIn.balanceOf(address(this));
         uint256 balanceOutAfter = params.tokenOut.balanceOf(address(this));
         if (balanceInAfter > balanceInBefore || balanceOutAfter < balanceOutBefore) revert SwapFailed();
+
+        if (isUniversalRouter) {
+            // Net of what the command sequence swept back to this contract, the router's
+            // tokenIn balance cannot drop below the pre-funding snapshot.
+            uint256 sweptBack = balanceInAfter + params.amountIn - balanceInBefore;
+            if (params.tokenIn.balanceOf(universalRouter) + sweptBack < routerBalanceInBefore) {
+                revert SwapInputExceeded();
+            }
+        }
 
         amountInDelta = balanceInBefore - balanceInAfter;
         amountOutDelta = balanceOutAfter - balanceOutBefore;

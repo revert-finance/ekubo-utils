@@ -121,6 +121,89 @@ contract EkuboUtilsTest is Test {
         assertEq(tokenOut.balanceOf(recipient), 15 ether);
     }
 
+    function testUniversalRouterRejectsSpendAboveCurrentFunding() external {
+        token0.mint(address(universalRouter), 5 ether);
+
+        vm.startPrank(owner);
+        token0.approve(address(utils), 10 ether);
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 15 ether, 20 ether);
+        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"01", inputs, block.timestamp));
+        vm.expectRevert(RouterSwapper.SwapInputExceeded.selector);
+        utils.swap(
+            EkuboUtils.SwapParams({
+                tokenIn: token0,
+                tokenOut: tokenOut,
+                amountIn: 10 ether,
+                minAmountOut: 20 ether,
+                deadline: block.timestamp,
+                recipient: recipient,
+                swapData: abi.encode(address(universalRouter), routerData),
+                unwrap: false,
+                permitData: ""
+            })
+        );
+        vm.stopPrank();
+    }
+
+    function testUniversalRouterAllowsPartialSpendWithSweepBack() external {
+        token0.mint(address(universalRouter), 5 ether);
+
+        vm.startPrank(owner);
+        token0.approve(address(utils), 10 ether);
+        bytes[] memory inputs = new bytes[](2);
+        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 6 ether, 9 ether);
+        inputs[1] = abi.encode(address(token0), address(utils), 4 ether);
+        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"0102", inputs, block.timestamp));
+        uint256 amountOut = utils.swap(
+            EkuboUtils.SwapParams({
+                tokenIn: token0,
+                tokenOut: tokenOut,
+                amountIn: 10 ether,
+                minAmountOut: 9 ether,
+                deadline: block.timestamp,
+                recipient: recipient,
+                swapData: abi.encode(address(universalRouter), routerData),
+                unwrap: false,
+                permitData: ""
+            })
+        );
+        vm.stopPrank();
+
+        assertEq(amountOut, 9 ether);
+        assertEq(token0.balanceOf(recipient), 4 ether);
+        assertEq(tokenOut.balanceOf(recipient), 9 ether);
+        assertEq(token0.balanceOf(address(universalRouter)), 5 ether);
+    }
+
+    function testZeroXRejectsThirdPartyInputInflow() external {
+        token0.mint(attacker, 3 ether);
+        vm.prank(attacker);
+        token0.approve(address(allowanceHolder), 3 ether);
+
+        vm.startPrank(owner);
+        token0.approve(address(utils), 10 ether);
+        bytes memory data = abi.encodeCall(
+            MockAllowanceHolder.fillWithThirdPartyInflow,
+            (address(token0), address(tokenOut), attacker, 10 ether, 3 ether, 12 ether)
+        );
+        vm.expectRevert(RouterSwapper.SwapInflowDetected.selector);
+        utils.swap(
+            EkuboUtils.SwapParams({
+                tokenIn: token0,
+                tokenOut: tokenOut,
+                amountIn: 10 ether,
+                minAmountOut: 12 ether,
+                deadline: block.timestamp,
+                recipient: recipient,
+                swapData: data,
+                unwrap: false,
+                permitData: ""
+            })
+        );
+        vm.stopPrank();
+    }
+
     function testSwapAndMintUsesPositionsAllowanceAndRevokesIt() external {
         (IERC20 first, IERC20 second) = _tokens();
         vm.startPrank(owner);
@@ -380,6 +463,38 @@ contract EkuboUtilsTest is Test {
         (IERC20 first, IERC20 second) = _tokens();
         assertEq(first.balanceOf(recipient), 1);
         assertEq(second.balanceOf(recipient), 2);
+    }
+
+    function testCompoundFeesRejectsThirdPartyInputInflow() external {
+        // Mock position amounts are wei-scale; the swap leg amounts must match so the
+        // revert comes from the inflow check, not the pre-swap AmountError guard.
+        uint256 tokenId = positions.mintTo(owner, MockEkuboPositions.Position(10, 10, 10, 10, 10));
+        (IERC20 first, IERC20 second) = _tokens();
+        MockERC20(address(first)).mint(attacker, 3);
+        MockERC20(address(second)).mint(address(allowanceHolder), 4);
+        vm.prank(attacker);
+        first.approve(address(allowanceHolder), 3);
+
+        EkuboUtils.Instructions memory instructions = _withdrawInstructions();
+        instructions.whatToDo = EkuboUtils.WhatToDo.COMPOUND_FEES;
+        instructions.targetToken = address(second);
+        instructions.liquidity = 0;
+        instructions.amountIn0 = 8;
+        instructions.amountOut0Min = 4;
+        instructions.swapData0 = abi.encodeCall(
+            MockAllowanceHolder.fillWithThirdPartyInflow, (address(first), address(second), attacker, 8, 3, 4)
+        );
+        instructions.minLiquidity = 1;
+
+        vm.startPrank(owner);
+        positions.approve(address(utils), tokenId);
+        vm.expectRevert(RouterSwapper.SwapInflowDetected.selector);
+        utils.execute(tokenId, instructions);
+        vm.stopPrank();
+
+        assertEq(positions.ownerOf(tokenId), owner);
+        assertEq(first.balanceOf(address(utils)), 0);
+        assertEq(first.allowance(address(utils), address(allowanceHolder)), 0);
     }
 
     function testPermit2RejectsPoolTokensInTheWrongOrder() external {
