@@ -14,7 +14,12 @@ Security-relevant design choices:
 - Only an NFT owner can initiate a position operation; approved third-party NFT operators cannot choose recipients.
 - ERC-20 deposits approve Ekubo Positions (the caller that executes the flash-accountant transfer), for an exact amount,
   and revoke afterward. Assets are transferred directly to Core.
-- 0x AllowanceHolder allowances are exact and revoked after each successful swap.
+- 0x AllowanceHolder allowances are exact and revoked after each successful swap. The input spend is measured from
+  the remaining allowance, so any third-party inflow of the input token during execution reverts instead of being
+  treated as unspent input or swap output.
+- Universal Router command sequences may sweep unspent input back to the utility, but the router can never be a net
+  source of the input token: net of sweep-backs, its balance cannot drop below what it held before the operation
+  funded it.
 - Wallet funding supports exact balance-checked transfers or Permit2 batch signature transfers.
 - The Universal Router and 0x payload formats match the current Revert quote adapter.
 - All public state-changing operations have transaction deadlines and output/liquidity slippage bounds.
