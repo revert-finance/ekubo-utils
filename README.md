@@ -19,7 +19,11 @@ Security-relevant design choices:
   treated as unspent input or swap output.
 - Universal Router command sequences may sweep unspent input back to the utility, but the router can never be a net
   source of the input token: net of sweep-backs, its balance cannot drop below what it held before the operation
-  funded it.
+  funded it. The router may not retain funded input either; anything unspent must be swept back in the same call.
+  Only swap commands (V2/V3 exact-in/out, V4 swap) and SWEEP are forwarded: position-manager, permit, payment,
+  bridge, and sub-plan commands revert, so the utility can never act as an authority proxy for them.
+- Two-leg swap-and-mint legs must each produce only their declared pool-token output; a side output of the other
+  pool token reverts rather than being stranded unaccounted in the utility.
 - Wallet funding supports exact balance-checked transfers or Permit2 batch signature transfers.
 - The Universal Router and 0x payload formats match the current Revert quote adapter.
 - All public state-changing operations have transaction deadlines and output/liquidity slippage bounds.
@@ -98,7 +102,9 @@ abi.encode(
 
 EkuboUtils transfers the maximum input to Universal Router before calling `execute`, so swap commands must use
 `payerIsUser = false`. Every output recipient must be `address(EkuboUtils)`, and the command sequence must sweep unused
-input back to `address(EkuboUtils)`. Otherwise EkuboUtils cannot observe the output or return unspent input to the user.
+input back to `address(EkuboUtils)`. The forwarded command types are restricted to swaps (V2/V3 exact-in/out, V4 swap)
+plus SWEEP; any other command reverts. A plan that leaves funded input in the router reverts as well, since that input
+could not be returned and would sit in a shared account.
 
 ## Operational limitations
 

@@ -13,6 +13,7 @@ abstract contract RouterSwapper {
     address public immutable universalRouter;
     address public immutable zeroxAllowanceHolder;
 
+    error InvalidSwapCommand();
     error InvalidSwapRouter();
     error MissingSwapData();
     error SameToken();
@@ -76,6 +77,13 @@ abstract contract RouterSwapper {
             (address target, bytes memory routerData) = abi.decode(swapData, (address, bytes));
             if (target != universalRouter) revert InvalidSwapRouter();
             UniversalRouterData memory data = abi.decode(routerData, (UniversalRouterData));
+            // Only swap and cleanup commands may be forwarded to the shared router: position-manager,
+            // permit, payment, and sub-plan commands could spend authority or balances outside this
+            // operation. The allow-revert flag is masked out; the command type is what is restricted.
+            // The bitmap allows V3/V2 exact-in/out swaps (0x00/0x01/0x08/0x09), SWEEP (0x04), V4_SWAP (0x10).
+            for (uint256 i; i < data.commands.length; ++i) {
+                if ((uint256(0x10313) >> (uint8(data.commands[i]) & 0x3f)) & 1 == 0) revert InvalidSwapCommand();
+            }
             // Snapshot what the router already holds: the command sequence must only spend
             // input funded by this call (amounts swept back here are credited below).
             routerBalanceInBefore = params.tokenIn.balanceOf(target);
@@ -101,12 +109,14 @@ abstract contract RouterSwapper {
         if (balanceInAfter > balanceInBefore || balanceOutAfter < balanceOutBefore) revert SwapFailed();
 
         if (isUniversalRouter) {
-            // Net of what the command sequence swept back to this contract, the router's
-            // tokenIn balance cannot drop below the pre-funding snapshot.
+            // The shared router's tokenIn balance must be unchanged by this operation, net of
+            // sweep-backs to this contract: it may neither retain funded input (stranding it for
+            // a later permissionless sweep) nor contribute balances it already held.
+            uint256 routerBalanceInAfter = params.tokenIn.balanceOf(universalRouter);
             uint256 sweptBack = balanceInAfter + params.amountIn - balanceInBefore;
-            if (params.tokenIn.balanceOf(universalRouter) + sweptBack < routerBalanceInBefore) {
-                revert SwapInputExceeded();
-            }
+            if (
+                routerBalanceInAfter > routerBalanceInBefore || routerBalanceInAfter + sweptBack < routerBalanceInBefore
+            ) revert SwapInputExceeded();
         }
 
         amountInDelta = balanceInBefore - balanceInAfter;

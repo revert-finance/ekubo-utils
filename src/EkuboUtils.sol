@@ -49,6 +49,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
     error TargetTokenNotInPool();
     error TooMuchEtherSent();
     error TransferError();
+    error UnexpectedSwapOutput();
     error UnexpectedTokenId();
     error WrongContract();
 
@@ -362,18 +363,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         if (amount0 < instructions.amountIn0 || amount1 < instructions.amountIn1) revert AmountError();
 
         if (instructions.whatToDo == WhatToDo.COMPOUND_FEES) {
-            (uint256 total0, uint256 total1) = _rebalancePositionAmounts(
-                instructions.position,
-                instructions.targetToken,
-                amount0,
-                amount1,
-                instructions.amountIn0,
-                instructions.amountOut0Min,
-                instructions.swapData0,
-                instructions.amountIn1,
-                instructions.amountOut1Min,
-                instructions.swapData1
-            );
+            (uint256 total0, uint256 total1) = _rebalanceFromInstructions(instructions, amount0, amount1);
             (uint128 addedLiquidity, uint128 added0, uint128 added1) =
                 _deposit(tokenId, instructions.position, total0, total1, instructions.minLiquidity);
             _returnLeftovers(
@@ -391,18 +381,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
             _requireSamePair(instructions.position.poolKey, instructions.newPosition.poolKey);
             _validateRecipient(instructions.recipientNFT);
 
-            (uint256 total0, uint256 total1) = _rebalancePositionAmounts(
-                instructions.position,
-                instructions.targetToken,
-                amount0,
-                amount1,
-                instructions.amountIn0,
-                instructions.amountOut0Min,
-                instructions.swapData0,
-                instructions.amountIn1,
-                instructions.amountOut1Min,
-                instructions.swapData1
-            );
+            (uint256 total0, uint256 total1) = _rebalanceFromInstructions(instructions, amount0, amount1);
             uint128 addedLiquidity;
             uint128 added0;
             uint128 added1;
@@ -445,30 +424,60 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         IERC20 target = IERC20(instructions.targetToken);
         uint256 targetAmount;
 
-        if (address(token0) == address(target)) {
-            targetAmount += amount0;
-        } else {
-            (uint256 spent0, uint256 received0) = _routerSwap(
-                RouterSwapParams(token0, target, amount0, instructions.amountOut0Min, instructions.swapData0)
-            );
-            targetAmount += received0;
-            if (spent0 < amount0) {
-                _transferToken(instructions.recipient, token0, amount0 - spent0, instructions.unwrap);
-            }
-        }
-        if (address(token1) == address(target)) {
-            targetAmount += amount1;
-        } else {
-            (uint256 spent1, uint256 received1) = _routerSwap(
-                RouterSwapParams(token1, target, amount1, instructions.amountOut1Min, instructions.swapData1)
-            );
-            targetAmount += received1;
-            if (spent1 < amount1) {
-                _transferToken(instructions.recipient, token1, amount1 - spent1, instructions.unwrap);
-            }
-        }
+        targetAmount += _swapOrPassthrough(
+            token0,
+            target,
+            amount0,
+            instructions.amountOut0Min,
+            instructions.swapData0,
+            instructions.recipient,
+            instructions.unwrap
+        );
+        targetAmount += _swapOrPassthrough(
+            token1,
+            target,
+            amount1,
+            instructions.amountOut1Min,
+            instructions.swapData1,
+            instructions.recipient,
+            instructions.unwrap
+        );
         if (targetAmount != 0) _transferToken(instructions.recipient, target, targetAmount, instructions.unwrap);
         emit WithdrawAndCollectAndSwap(tokenId, address(target), targetAmount);
+    }
+
+    function _swapOrPassthrough(
+        IERC20 token,
+        IERC20 target,
+        uint256 amount,
+        uint256 amountOutMin,
+        bytes memory swapData,
+        address recipient,
+        bool unwrap
+    ) internal returns (uint256 targetDelta) {
+        if (address(token) == address(target)) return amount;
+        (uint256 spent, uint256 received) = _routerSwap(RouterSwapParams(token, target, amount, amountOutMin, swapData));
+        if (spent < amount) _transferToken(recipient, token, amount - spent, unwrap);
+        return received;
+    }
+
+    function _rebalanceFromInstructions(
+        Instructions memory instructions,
+        uint256 amount0,
+        uint256 amount1
+    ) internal returns (uint256 total0, uint256 total1) {
+        return _rebalancePositionAmounts(
+            instructions.position,
+            instructions.targetToken,
+            amount0,
+            amount1,
+            instructions.amountIn0,
+            instructions.amountOut0Min,
+            instructions.swapData0,
+            instructions.amountIn1,
+            instructions.amountOut1Min,
+            instructions.swapData1
+        );
     }
 
     function _rebalancePositionAmounts(
@@ -521,6 +530,11 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
             total1 = params.amount1 - spent;
             total0 = params.amount0 + received;
         } else if (address(params.swapSourceToken) != address(0)) {
+            // Each leg must produce only its declared pool-token output. Since `received` is the
+            // leg's measured output delta, requiring the balance to match it exactly rejects any
+            // side output of the other pool token, which would otherwise be stranded here.
+            uint256 token0BeforeLegs = token0.balanceOf(address(this));
+            uint256 token1BeforeLegs = token1.balanceOf(address(this));
             (uint256 spent0, uint256 received0) = _routerSwap(
                 RouterSwapParams(
                     params.swapSourceToken, token0, params.amountIn0, params.amountOut0Min, params.swapData0
@@ -531,6 +545,10 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
                     params.swapSourceToken, token1, params.amountIn1, params.amountOut1Min, params.swapData1
                 )
             );
+            if (
+                token0.balanceOf(address(this)) != token0BeforeLegs + received0
+                    || token1.balanceOf(address(this)) != token1BeforeLegs + received1
+            ) revert UnexpectedSwapOutput();
             total0 = params.amount0 + received0;
             total1 = params.amount1 + received1;
             uint256 leftover = params.amountIn0 + params.amountIn1 - spent0 - spent1;
@@ -696,8 +714,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
                 tokenId, position.poolKey, position.tickLower, position.tickUpper, amount0Max, amount1Max, minLiquidity
             );
         } else {
-            bytes[] memory calls = new bytes[](2);
-            calls[0] = abi.encodeCall(
+            bytes memory depositCall = abi.encodeCall(
                 IEkuboPositions.deposit,
                 (
                     tokenId,
@@ -709,9 +726,8 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
                     minLiquidity
                 )
             );
-            calls[1] = abi.encodeCall(IEkuboPositions.refundNativeToken, ());
-            bytes[] memory results = positions.multicall{value: nativeAmount}(calls);
-            (liquidity, amount0, amount1) = abi.decode(results[0], (uint128, uint128, uint128));
+            (liquidity, amount0, amount1) =
+                abi.decode(_positionsMulticall(depositCall, nativeAmount), (uint128, uint128, uint128));
             uint256 nativeUsed = position.poolKey.token0 == address(0) ? amount0 : amount1;
             _wrapNativeAmountAbove(nativeBalanceBefore, nativeAmount - nativeUsed);
         }
@@ -733,18 +749,28 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
                 position.poolKey, position.tickLower, position.tickUpper, amount0Max, amount1Max, minLiquidity
             );
         } else {
-            bytes[] memory calls = new bytes[](2);
-            calls[0] = abi.encodeCall(
+            bytes memory mintCall = abi.encodeCall(
                 IEkuboPositions.mintAndDeposit,
                 (position.poolKey, position.tickLower, position.tickUpper, amount0Max, amount1Max, minLiquidity)
             );
-            calls[1] = abi.encodeCall(IEkuboPositions.refundNativeToken, ());
-            bytes[] memory results = positions.multicall{value: nativeAmount}(calls);
-            (tokenId, liquidity, amount0, amount1) = abi.decode(results[0], (uint256, uint128, uint128, uint128));
+            (tokenId, liquidity, amount0, amount1) =
+                abi.decode(_positionsMulticall(mintCall, nativeAmount), (uint256, uint128, uint128, uint128));
             uint256 nativeUsed = position.poolKey.token0 == address(0) ? amount0 : amount1;
             _wrapNativeAmountAbove(nativeBalanceBefore, nativeAmount - nativeUsed);
         }
         _revokePositionsApprovals(position.poolKey);
+    }
+
+    /// @dev Bundles a native-paying deposit/mint call with the mandatory refundNativeToken sweep.
+    function _positionsMulticall(
+        bytes memory depositCall,
+        uint256 nativeAmount
+    ) internal returns (bytes memory result) {
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = depositCall;
+        calls[1] = abi.encodeCall(IEkuboPositions.refundNativeToken, ());
+        bytes[] memory results = positions.multicall{value: nativeAmount}(calls);
+        return results[0];
     }
 
     function _approvePositionsAndUnwrap(
