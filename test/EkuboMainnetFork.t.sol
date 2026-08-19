@@ -7,7 +7,6 @@ import {IPermit2} from "permit2/interfaces/IPermit2.sol";
 import {ISignatureTransfer} from "permit2/interfaces/ISignatureTransfer.sol";
 
 import {EkuboUtils} from "../src/EkuboUtils.sol";
-import {RouterSwapper} from "../src/RouterSwapper.sol";
 import {EkuboPoolKey, IEkuboPositions} from "../src/interfaces/IEkuboPositions.sol";
 import {IWETH9} from "../src/interfaces/IWETH9.sol";
 
@@ -16,10 +15,8 @@ contract EkuboMainnetForkTest is Test {
     IEkuboPositions internal constant POSITIONS = IEkuboPositions(0x02D9876A21AF7545f8632C3af76eC90b5ad4b66D);
     address internal constant CORE = 0x00000000000014aA86C5d3c41765bb24e11bd701;
     address internal constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address internal constant WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
     address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
-    address internal constant UNIVERSAL_ROUTER = 0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af;
     address internal constant ZEROX_ALLOWANCE_HOLDER = 0x0000000000001fF3684f28c67538d4D072C22734;
     address internal constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
     uint256 internal constant TOKEN_ID = 115405844744126724027399150793600264461049412098266383761154101033925042376216;
@@ -41,7 +38,7 @@ contract EkuboMainnetForkTest is Test {
         vm.createSelectFork(rpcUrl);
 
         address owner = POSITIONS.ownerOf(TOKEN_ID);
-        EkuboUtils utils = new EkuboUtils(POSITIONS, CORE, IWETH9(WETH), address(1), address(2), IPermit2(address(3)));
+        EkuboUtils utils = new EkuboUtils(POSITIONS, CORE, IWETH9(WETH), address(1), IPermit2(address(2)));
         EkuboUtils.PositionSpec memory position =
             EkuboUtils.PositionSpec({poolKey: _poolKey(), tickLower: 0, tickUpper: 450});
         (uint128 liquidityBefore,,,,) =
@@ -87,52 +84,6 @@ contract EkuboMainnetForkTest is Test {
         assertEq(IERC20(CBBTC).allowance(address(utils), address(POSITIONS)), 0);
         assertEq(IERC20(WBTC).allowance(address(utils), CORE), 0);
         assertEq(IERC20(CBBTC).allowance(address(utils), CORE), 0);
-    }
-
-    function testMainnetUniversalRouterSwapUsesRouterBalanceAndSweep() external {
-        string memory rpcUrl = _mainnetRpcUrl();
-        if (bytes(rpcUrl).length == 0) return;
-        vm.createSelectFork(rpcUrl);
-
-        EkuboUtils utils = _deployUtils();
-        address owner = makeAddr("universal-router-owner");
-        uint256 amountIn = 0.01 ether;
-        deal(WETH, owner, amountIn);
-
-        bytes[] memory inputs = new bytes[](2);
-        // V3_SWAP_EXACT_IN: the router already owns the WETH, so payerIsUser is false
-        // and output is returned to EkuboUtils for its balance-delta check.
-        inputs[0] = abi.encode(address(utils), amountIn, uint256(1), abi.encodePacked(WETH, uint24(500), USDC), false);
-        // SWEEP returns any unspent input to EkuboUtils so it can refund the owner.
-        inputs[1] = abi.encode(WETH, address(utils), uint256(0));
-        bytes memory swapData = abi.encode(
-            UNIVERSAL_ROUTER,
-            abi.encode(
-                RouterSwapper.UniversalRouterData({commands: hex"0004", inputs: inputs, deadline: block.timestamp})
-            )
-        );
-
-        vm.startPrank(owner);
-        IERC20(WETH).approve(address(utils), amountIn);
-        uint256 amountOut = utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: IERC20(WETH),
-                tokenOut: IERC20(USDC),
-                amountIn: amountIn,
-                minAmountOut: 1,
-                deadline: block.timestamp,
-                recipient: owner,
-                swapData: swapData,
-                unwrap: false,
-                permitData: ""
-            })
-        );
-        vm.stopPrank();
-
-        assertGt(amountOut, 0);
-        assertEq(IERC20(USDC).balanceOf(owner), amountOut);
-        assertEq(IERC20(WETH).balanceOf(address(utils)), 0);
-        assertEq(IERC20(USDC).balanceOf(address(utils)), 0);
     }
 
     function testMainnetSwapAndMintWithRealPermit2Signature() external {
@@ -192,8 +143,7 @@ contract EkuboMainnetForkTest is Test {
     }
 
     function _deployUtils() internal returns (EkuboUtils) {
-        return
-            new EkuboUtils(POSITIONS, CORE, IWETH9(WETH), UNIVERSAL_ROUTER, ZEROX_ALLOWANCE_HOLDER, IPermit2(PERMIT2));
+        return new EkuboUtils(POSITIONS, CORE, IWETH9(WETH), ZEROX_ALLOWANCE_HOLDER, IPermit2(PERMIT2));
     }
 
     function _signPermit2Batch(

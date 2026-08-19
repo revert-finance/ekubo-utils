@@ -17,15 +17,10 @@ Security-relevant design choices:
 - 0x AllowanceHolder allowances are exact and revoked after each successful swap. The input spend is measured from
   the remaining allowance, so any third-party inflow of the input token during execution reverts instead of being
   treated as unspent input or swap output.
-- Universal Router command sequences may sweep unspent input back to the utility, but the router can never be a net
-  source of the input token: net of sweep-backs, its balance cannot drop below what it held before the operation
-  funded it. The router may not retain funded input either; anything unspent must be swept back in the same call.
-  Only swap commands (V2/V3 exact-in/out, V4 swap) and SWEEP are forwarded: position-manager, permit, payment,
-  bridge, and sub-plan commands revert, so the utility can never act as an authority proxy for them.
 - Two-leg swap-and-mint legs must each produce only their declared pool-token output; a side output of the other
   pool token reverts rather than being stranded unaccounted in the utility.
 - Wallet funding supports exact balance-checked transfers or Permit2 batch signature transfers.
-- The Universal Router and 0x payload formats match the current Revert quote adapter.
+- Swaps accept only raw 0x Swap API v2 calldata and call only the configured 0x AllowanceHolder.
 - All public state-changing operations have transaction deadlines and output/liquidity slippage bounds.
 - `CHANGE_RANGE` must remove the position's full current liquidity. Partial requests revert rather than silently
   splitting one product-level position into an old NFT and a newly ranged NFT. It must also collect the old range's
@@ -89,23 +84,6 @@ Pass the quote's raw transaction calldata. The quote taker must be `EkuboUtils`,
 mainnet 0x AllowanceHolder configured in the deployment. EkuboUtils grants that holder only the exact input allowance
 for the call and clears it afterward.
 
-### Universal Router
-
-Encode Universal Router payloads as:
-
-```solidity
-abi.encode(
-    universalRouter,
-    abi.encode(RouterSwapper.UniversalRouterData(commands, inputs, deadline))
-)
-```
-
-EkuboUtils transfers the maximum input to Universal Router before calling `execute`, so swap commands must use
-`payerIsUser = false`. Every output recipient must be `address(EkuboUtils)`, and the command sequence must sweep unused
-input back to `address(EkuboUtils)`. The forwarded command types are restricted to swaps (V2/V3 exact-in/out, V4 swap)
-plus SWEEP; any other command reverts. A plan that leaves funded input in the router reverts as well, since that input
-could not be returned and would sit in a shared account.
-
 ## Operational limitations
 
 - Sending an Ekubo NFT with plain `transferFrom` bypasses `onERC721Received` and leaves it permanently held by this
@@ -124,9 +102,9 @@ forge test
 forge build --sizes
 ```
 
-Set `MAINNET_RPC_URL` to run the optional fork scenarios against the real Ekubo Positions, Permit2, and Universal
-Router contracts. The deployment script is mainnet-only, pins all six constructor dependencies, and rejects any
-dependency without deployed code:
+Set `MAINNET_RPC_URL` to run the optional fork scenarios against the real Ekubo Positions and Permit2 contracts. The
+deployment script is mainnet-only, pins all five constructor dependencies, and rejects any dependency without deployed
+code:
 
 ```bash
 forge script script/DeployEkuboUtils.s.sol:DeployEkuboUtils \

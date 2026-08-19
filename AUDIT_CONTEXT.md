@@ -36,7 +36,7 @@ This is not a request for behavioral parity where Ekubo differs from Uniswap.
 ## Trusted external contracts
 
 Assume the canonical deployed implementations of Ekubo Core, Ekubo Positions,
-WETH, Permit2, Universal Router, and 0x AllowanceHolder are not malicious. Their
+WETH, Permit2, and 0x AllowanceHolder are not malicious. Their
 mainnet addresses are pinned in `script/DeployEkuboUtils.s.sol`.
 
 Re-auditing those external projects is out of scope. The following integration
@@ -47,7 +47,7 @@ properties remain in scope:
 - payer and recipient identity;
 - allowance lifecycle;
 - callback behavior and reentrancy exposure;
-- malformed or adversarial router calldata;
+- malformed or adversarial swap calldata;
 - incorrect assumptions about the external contracts' behavior.
 
 ## Threat model
@@ -65,8 +65,8 @@ incorrect ranges, arbitrary recipients, and malformed action envelopes. The
 contract must fail safely or preserve ownership and asset security in those
 cases.
 
-0x and Universal Router calldata are supplied by the caller. The execution
-targets are pinned, but the calldata must still be treated as hostile.
+0x calldata is supplied by the caller. The execution target is pinned, but the
+calldata must still be treated as hostile.
 
 There is no oracle-based price protection. Deadlines and caller-supplied
 minimum output and liquidity values are the intended economic protection. MEV
@@ -94,7 +94,7 @@ no administrative or rescue path.
   external effects.
 - Fee-on-transfer funding is intentionally rejected.
 - Unsupported pools and actions must fail safely.
-- Reentrancy through token, NFT, Ekubo, or router callbacks must not permit
+- Reentrancy through token, NFT, Ekubo, or swap callbacks must not permit
   unauthorized execution, double spending, or incorrect payer or recipient
   use.
 
@@ -118,12 +118,8 @@ required amount is zero:
 2. pool token1;
 3. a distinct swap-source token, if required.
 
-Universal Router commands use `payerIsUser = false`, send outputs to
-EkuboUtils, and sweep unused input back to EkuboUtils.
-
-The outer EkuboUtils deadline must always be enforced. Universal Router also
-has its own payload deadline. Router-specific expiry must not replace the
-utility-level deadline.
+Swap payloads are raw 0x Swap API v2 calldata quoted with EkuboUtils as the
+taker. The outer EkuboUtils deadline must always be enforced.
 
 ## Accepted limitations
 
