@@ -873,7 +873,10 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
     function _validateRecipient(
         address recipient
     ) internal view {
-        if (recipient == address(0) || recipient == address(this)) revert InvalidRecipient();
+        if (
+            recipient == address(0) || recipient == address(this) || recipient == address(weth)
+                || recipient == zeroxAllowanceHolder
+        ) revert InvalidRecipient();
     }
 
     function _toUint128Pair(

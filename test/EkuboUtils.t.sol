@@ -94,6 +94,42 @@ contract EkuboUtilsTest is Test {
         assertEq(token0.balanceOf(address(utils)), 0);
     }
 
+    function testSwapRejectsWethRecipient() external {
+        vm.expectRevert(EkuboUtils.InvalidRecipient.selector);
+        vm.prank(owner);
+        utils.swap(
+            EkuboUtils.SwapParams({
+                tokenIn: token0,
+                tokenOut: tokenOut,
+                amountIn: 0,
+                minAmountOut: 0,
+                deadline: block.timestamp,
+                recipient: address(weth),
+                swapData: "",
+                unwrap: true,
+                permitData: ""
+            })
+        );
+    }
+
+    function testSwapRejectsZeroXAllowanceHolderRecipient() external {
+        vm.expectRevert(EkuboUtils.InvalidRecipient.selector);
+        vm.prank(owner);
+        utils.swap(
+            EkuboUtils.SwapParams({
+                tokenIn: token0,
+                tokenOut: tokenOut,
+                amountIn: 0,
+                minAmountOut: 0,
+                deadline: block.timestamp,
+                recipient: address(allowanceHolder),
+                swapData: "",
+                unwrap: false,
+                permitData: ""
+            })
+        );
+    }
+
     function testRejectsZeroAllowanceHolder() external {
         vm.expectRevert(RouterSwapper.InvalidSwapRouter.selector);
         new EkuboUtils(
