@@ -174,10 +174,9 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         IEkuboPositions _positions,
         address _core,
         IWETH9 _weth,
-        address _universalRouter,
         address _zeroxAllowanceHolder,
         IPermit2 _permit2
-    ) RouterSwapper(_universalRouter, _zeroxAllowanceHolder) {
+    ) RouterSwapper(_zeroxAllowanceHolder) {
         if (
             address(_positions) == address(0) || _core == address(0) || address(_weth) == address(0)
                 || address(_permit2) == address(0)

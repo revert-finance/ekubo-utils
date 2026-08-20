@@ -14,7 +14,7 @@ import {IWETH9} from "../src/interfaces/IWETH9.sol";
 import {MockERC20, MockFeeOnTransferERC20, MockWETH} from "./mocks/MockERC20.sol";
 import {MockCore, MockEkuboPositions} from "./mocks/MockEkubo.sol";
 import {MockPermit2} from "./mocks/MockPermit2.sol";
-import {MockAllowanceHolder, MockUniversalRouter} from "./mocks/MockSwapRouters.sol";
+import {MockAllowanceHolder} from "./mocks/MockSwapRouters.sol";
 
 contract EkuboUtilsTest is Test {
     event WithdrawAndCollect(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
@@ -31,7 +31,6 @@ contract EkuboUtilsTest is Test {
     MockEkuboPositions internal positions;
     MockPermit2 internal permit2;
     MockAllowanceHolder internal allowanceHolder;
-    MockUniversalRouter internal universalRouter;
     EkuboUtils internal utils;
 
     EkuboUtils.PositionSpec internal spec;
@@ -45,12 +44,10 @@ contract EkuboUtilsTest is Test {
         positions = new MockEkuboPositions(core);
         permit2 = new MockPermit2();
         allowanceHolder = new MockAllowanceHolder();
-        universalRouter = new MockUniversalRouter();
         utils = new EkuboUtils(
             IEkuboPositions(address(positions)),
             address(core),
             IWETH9(address(weth)),
-            address(universalRouter),
             address(allowanceHolder),
             IPermit2(address(permit2))
         );
@@ -63,8 +60,9 @@ contract EkuboUtilsTest is Test {
 
         token0.mint(owner, 1_000 ether);
         token1.mint(owner, 1_000 ether);
+        token0.mint(address(allowanceHolder), 1_000 ether);
+        token1.mint(address(allowanceHolder), 1_000 ether);
         tokenOut.mint(address(allowanceHolder), 1_000 ether);
-        tokenOut.mint(address(universalRouter), 1_000 ether);
         token0.mint(address(positions), 1_000 ether);
         token1.mint(address(positions), 1_000 ether);
     }
@@ -96,159 +94,15 @@ contract EkuboUtilsTest is Test {
         assertEq(token0.balanceOf(address(utils)), 0);
     }
 
-    function testSwapThroughUniversalRouterPayload() external {
-        vm.startPrank(owner);
-        token0.approve(address(utils), 10 ether);
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 10 ether, 15 ether);
-        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"01", inputs, block.timestamp));
-        uint256 amountOut = utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 15 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), routerData),
-                unwrap: false,
-                permitData: ""
-            })
+    function testRejectsZeroAllowanceHolder() external {
+        vm.expectRevert(RouterSwapper.InvalidSwapRouter.selector);
+        new EkuboUtils(
+            IEkuboPositions(address(positions)),
+            address(core),
+            IWETH9(address(weth)),
+            address(0),
+            IPermit2(address(permit2))
         );
-        vm.stopPrank();
-
-        assertEq(amountOut, 15 ether);
-        assertEq(tokenOut.balanceOf(recipient), 15 ether);
-    }
-
-    function testUniversalRouterRejectsSpendAboveCurrentFunding() external {
-        token0.mint(address(universalRouter), 5 ether);
-
-        vm.startPrank(owner);
-        token0.approve(address(utils), 10 ether);
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 15 ether, 20 ether);
-        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"01", inputs, block.timestamp));
-        vm.expectRevert(RouterSwapper.SwapInputExceeded.selector);
-        utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 20 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), routerData),
-                unwrap: false,
-                permitData: ""
-            })
-        );
-        vm.stopPrank();
-    }
-
-    function testUniversalRouterAllowsPartialSpendWithSweepBack() external {
-        token0.mint(address(universalRouter), 5 ether);
-
-        vm.startPrank(owner);
-        token0.approve(address(utils), 10 ether);
-        bytes[] memory inputs = new bytes[](2);
-        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 6 ether, 9 ether);
-        inputs[1] = abi.encode(address(token0), address(utils), 4 ether);
-        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"0104", inputs, block.timestamp));
-        uint256 amountOut = utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 9 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), routerData),
-                unwrap: false,
-                permitData: ""
-            })
-        );
-        vm.stopPrank();
-
-        assertEq(amountOut, 9 ether);
-        assertEq(token0.balanceOf(recipient), 4 ether);
-        assertEq(tokenOut.balanceOf(recipient), 9 ether);
-        assertEq(token0.balanceOf(address(universalRouter)), 5 ether);
-    }
-
-    function testUniversalRouterCannotRetainFundedInput() external {
-        // Regression for EKUB-7: a plan that succeeds but leaves funded input in the shared
-        // router must revert instead of stranding it for a later permissionless sweep.
-        vm.startPrank(owner);
-        token0.approve(address(utils), 10 ether);
-        bytes[] memory inputs = new bytes[](1);
-        // The mock burns what the plan declares; declaring zero leaves the funded input behind.
-        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 0, 5 ether);
-        bytes memory routerData = abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs, block.timestamp));
-        vm.expectRevert(RouterSwapper.SwapInputExceeded.selector);
-        utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 5 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), routerData),
-                unwrap: false,
-                permitData: ""
-            })
-        );
-        vm.stopPrank();
-
-        assertEq(token0.balanceOf(address(universalRouter)), 0);
-        assertEq(token0.balanceOf(address(utils)), 0);
-    }
-
-    function testUniversalRouterRejectsNonSwapCommands() external {
-        // Regression for EKUB-6/EKUB-4: position-manager, sub-plan, and other non-swap commands
-        // must never be forwarded, so this contract cannot act as an authority proxy for them.
-        vm.startPrank(owner);
-        token0.approve(address(utils), 20 ether);
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(token0), address(tokenOut), address(utils), 10 ether, 15 ether);
-
-        bytes memory positionManagerData =
-            abi.encode(RouterSwapper.UniversalRouterData(hex"1212", inputs, block.timestamp));
-        vm.expectRevert(RouterSwapper.InvalidSwapCommand.selector);
-        utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 15 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), positionManagerData),
-                unwrap: false,
-                permitData: ""
-            })
-        );
-
-        bytes memory subPlanData = abi.encode(RouterSwapper.UniversalRouterData(hex"21", inputs, block.timestamp));
-        vm.expectRevert(RouterSwapper.InvalidSwapCommand.selector);
-        utils.swap(
-            EkuboUtils.SwapParams({
-                tokenIn: token0,
-                tokenOut: tokenOut,
-                amountIn: 10 ether,
-                minAmountOut: 15 ether,
-                deadline: block.timestamp,
-                recipient: recipient,
-                swapData: abi.encode(address(universalRouter), subPlanData),
-                unwrap: false,
-                permitData: ""
-            })
-        );
-        vm.stopPrank();
-
-        assertEq(token0.balanceOf(address(utils)), 0);
-        assertEq(token0.balanceOf(address(universalRouter)), 0);
     }
 
     function testZeroXRejectsThirdPartyInputInflow() external {
@@ -572,7 +426,7 @@ contract EkuboUtilsTest is Test {
         assertEq(first.allowance(address(utils), address(allowanceHolder)), 0);
     }
 
-    function testSwapAndMintWithTwoUniversalRouterLegs() external {
+    function testSwapAndMintWithTwoZeroXLegs() external {
         // The two-leg source-token flow stays intact when each leg yields only its declared output.
         MockERC20 source = new MockERC20("Source", "SRC");
         (IERC20 first, IERC20 second) = _tokens();
@@ -580,21 +434,14 @@ contract EkuboUtilsTest is Test {
 
         vm.startPrank(owner);
         source.approve(address(utils), 20 ether);
-        bytes[] memory inputs0 = new bytes[](1);
-        inputs0[0] = abi.encode(address(source), address(first), address(utils), 10 ether, 8 ether);
-        bytes[] memory inputs1 = new bytes[](1);
-        inputs1[0] = abi.encode(address(source), address(second), address(utils), 10 ether, 6 ether);
-
         EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
         params.swapSourceToken = source;
         params.amountIn0 = 10 ether;
-        params.swapData0 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs0, block.timestamp))
-        );
+        params.swapData0 =
+            abi.encodeCall(MockAllowanceHolder.fill, (address(source), address(first), 10 ether, 8 ether));
         params.amountIn1 = 10 ether;
-        params.swapData1 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs1, block.timestamp))
-        );
+        params.swapData1 =
+            abi.encodeCall(MockAllowanceHolder.fill, (address(source), address(second), 10 ether, 6 ether));
         params.minLiquidity = 7 ether;
         (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1) = utils.swapAndMint(params);
         vm.stopPrank();
@@ -617,16 +464,12 @@ contract EkuboUtilsTest is Test {
         vm.startPrank(owner);
         first.approve(address(utils), 20 ether);
 
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(first), address(second), address(utils), 5 ether, 6 ether);
         EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
         params.amount0 = 20 ether;
         params.swapSourceToken = first;
         params.amountIn1 = 5 ether;
         params.amountOut1Min = 6 ether;
-        params.swapData1 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs, block.timestamp))
-        );
+        params.swapData1 = abi.encodeCall(MockAllowanceHolder.fill, (address(first), address(second), 5 ether, 6 ether));
         // Would revert with SlippageError if the wrong leg's minimum were applied.
         params.amountOut0Min = type(uint256).max;
         params.minLiquidity = 1;
@@ -644,16 +487,12 @@ contract EkuboUtilsTest is Test {
         vm.startPrank(owner);
         second.approve(address(utils), 20 ether);
 
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(second), address(first), address(utils), 5 ether, 6 ether);
         EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
         params.amount1 = 20 ether;
         params.swapSourceToken = second;
         params.amountIn0 = 5 ether;
         params.amountOut0Min = 6 ether;
-        params.swapData0 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs, block.timestamp))
-        );
+        params.swapData0 = abi.encodeCall(MockAllowanceHolder.fill, (address(second), address(first), 5 ether, 6 ether));
         // Would revert with SlippageError if the wrong leg's minimum were applied.
         params.amountOut1Min = type(uint256).max;
         params.minLiquidity = 1;
@@ -671,27 +510,18 @@ contract EkuboUtilsTest is Test {
         MockERC20 source = new MockERC20("Source", "SRC");
         (IERC20 first, IERC20 second) = _tokens();
         source.mint(owner, 20 ether);
-        MockERC20(address(second)).mint(address(universalRouter), 5 ether);
-
         vm.startPrank(owner);
         source.approve(address(utils), 20 ether);
-        bytes[] memory inputs0 = new bytes[](2);
-        inputs0[0] = abi.encode(address(source), address(first), address(utils), 10 ether, 8 ether);
-        // The plan also sweeps the other pool token to the utility: an undeclared side output.
-        inputs0[1] = abi.encode(address(second), address(utils), 5 ether);
-        bytes[] memory inputs1 = new bytes[](1);
-        inputs1[0] = abi.encode(address(source), address(second), address(utils), 10 ether, 6 ether);
-
         EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
         params.swapSourceToken = source;
         params.amountIn0 = 10 ether;
-        params.swapData0 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"0004", inputs0, block.timestamp))
+        params.swapData0 = abi.encodeCall(
+            MockAllowanceHolder.fillWithSideOutput,
+            (address(source), address(first), address(second), 10 ether, 8 ether, 5 ether)
         );
         params.amountIn1 = 10 ether;
-        params.swapData1 = abi.encode(
-            address(universalRouter), abi.encode(RouterSwapper.UniversalRouterData(hex"00", inputs1, block.timestamp))
-        );
+        params.swapData1 =
+            abi.encodeCall(MockAllowanceHolder.fill, (address(source), address(second), 10 ether, 6 ether));
         params.minLiquidity = 1;
         vm.expectRevert(EkuboUtils.UnexpectedSwapOutput.selector);
         utils.swapAndMint(params);
