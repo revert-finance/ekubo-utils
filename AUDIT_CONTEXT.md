@@ -79,6 +79,10 @@ no administrative or rescue path.
 
 - Existing-position actions may custody the NFT only atomically and must return
   it to the initiating owner.
+- Outbound NFT delivery must account for Ekubo Positions requiring an
+  `IERC721Receiver` callback even when `safeTransferFrom` targets an EOA:
+  return to EOAs with `transferFrom`, while preserving safe-transfer callbacks
+  and callback data for contract recipients.
 - No standing ERC721 operator approval should be required.
 - Approved NFT operators must not be able to choose action recipients.
 - Unspent tokens and native currency must be returned to the correct payer.

@@ -195,7 +195,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         if (positions.ownerOf(tokenId) != msg.sender) revert NftOwnerOnly();
         positions.transferFrom(msg.sender, address(this), tokenId);
         newTokenId = _executePositionAction(tokenId, instructions);
-        positions.safeTransferFrom(address(this), msg.sender, tokenId, instructions.returnData);
+        _transferPosition(msg.sender, tokenId, instructions.returnData);
     }
 
     /// @notice Executes instructions sent with a safe NFT transfer initiated directly by its owner.
@@ -225,7 +225,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         } else {
             revert NotSupportedWhatToDo();
         }
-        positions.safeTransferFrom(address(this), from, tokenId, returnData);
+        _transferPosition(from, tokenId, returnData);
         return IERC721Receiver.onERC721Received.selector;
     }
 
@@ -280,7 +280,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         );
         (uint256 total0, uint256 total1) = _swapAndPrepareAmounts(params, token0, token1);
         (tokenId, liquidity, amount0, amount1) = _mintAndDeposit(params.position, total0, total1, params.minLiquidity);
-        positions.safeTransferFrom(address(this), params.recipientNFT, tokenId, params.returnData);
+        _transferPosition(params.recipientNFT, tokenId, params.returnData);
         _returnLeftovers(params.recipient, params.position.poolKey, total0, total1, amount0, amount1, params.unwrap);
         emit SwapAndMint(tokenId, liquidity, amount0, amount1);
     }
@@ -386,9 +386,7 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
             uint128 added1;
             (newTokenId, addedLiquidity, added0, added1) =
                 _mintAndDeposit(instructions.newPosition, total0, total1, instructions.minLiquidity);
-            positions.safeTransferFrom(
-                address(this), instructions.recipientNFT, newTokenId, instructions.newPositionReturnData
-            );
+            _transferPosition(instructions.recipientNFT, newTokenId, instructions.newPositionReturnData);
             _returnLeftovers(
                 instructions.recipient,
                 instructions.newPosition.poolKey,
@@ -809,6 +807,21 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         (IERC20 token0, IERC20 token1) = _normalizedTokens(poolKey);
         if (total0 > added0) _transferToken(recipient, token0, total0 - added0, unwrap);
         if (total1 > added1) _transferToken(recipient, token1, total1 - added1, unwrap);
+    }
+
+    /// @dev Ekubo Positions' safeTransferFrom always requires an ERC721Receiver
+    /// response, including for EOAs. Use the plain transfer for EOAs while
+    /// preserving the callback and return data for contract recipients.
+    function _transferPosition(
+        address recipient,
+        uint256 tokenId,
+        bytes memory data
+    ) internal {
+        if (recipient.code.length == 0) {
+            positions.transferFrom(address(this), recipient, tokenId);
+        } else {
+            positions.safeTransferFrom(address(this), recipient, tokenId, data);
+        }
     }
 
     function _transferToken(

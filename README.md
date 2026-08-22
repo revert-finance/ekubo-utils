@@ -61,6 +61,9 @@ before the call completes. ERC-20 inputs can use an ordinary exact approval to `
 Because an ERC-721 transfer cannot carry ETH, native-pool inputs for this direct path are supplied as WETH and unwrapped
 inside the utility.
 
+Ekubo Positions requires an ERC721 receiver callback even when `safeTransferFrom` targets an EOA. EkuboUtils therefore
+returns NFTs to EOAs with `transferFrom`, while contract recipients retain `safeTransferFrom` and its callback data.
+
 Unlike V3Utils, there is no `executeWithPermit`: Ekubo's Positions NFT does not expose the Uniswap V3 EIP-712 NFT permit
 method. Direct owner transfers provide the approval-free position-action path instead.
 
