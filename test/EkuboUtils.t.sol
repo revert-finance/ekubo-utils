@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {IPermit2} from "permit2/interfaces/IPermit2.sol";
 import {ISignatureTransfer} from "permit2/interfaces/ISignatureTransfer.sol";
 
@@ -15,6 +16,22 @@ import {MockERC20, MockFeeOnTransferERC20, MockWETH} from "./mocks/MockERC20.sol
 import {MockCore, MockEkuboPositions} from "./mocks/MockEkubo.sol";
 import {MockPermit2} from "./mocks/MockPermit2.sol";
 import {MockAllowanceHolder} from "./mocks/MockSwapRouters.sol";
+
+contract RecordingNftRecipient is IERC721Receiver {
+    uint256 public tokenId;
+    bytes public data;
+
+    function onERC721Received(
+        address,
+        address,
+        uint256 receivedTokenId,
+        bytes calldata receivedData
+    ) external returns (bytes4) {
+        tokenId = receivedTokenId;
+        data = receivedData;
+        return IERC721Receiver.onERC721Received.selector;
+    }
+}
 
 contract EkuboUtilsTest is Test {
     event WithdrawAndCollect(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
@@ -207,6 +224,41 @@ contract EkuboUtilsTest is Test {
         assertEq(second.allowance(address(utils), address(core)), 0);
         assertEq(first.allowance(address(utils), address(positions)), 0);
         assertEq(second.allowance(address(utils), address(positions)), 0);
+    }
+
+    function testSwapAndMintPreservesSafeCallbackForContractRecipient() external {
+        RecordingNftRecipient nftRecipient = new RecordingNftRecipient();
+        bytes memory returnData = hex"1234";
+        (IERC20 first, IERC20 second) = _tokens();
+        vm.startPrank(owner);
+        first.approve(address(utils), 20 ether);
+        second.approve(address(utils), 10 ether);
+        (uint256 tokenId,,,) = utils.swapAndMint(
+            EkuboUtils.SwapAndMintParams({
+                position: spec,
+                amount0: 20 ether,
+                amount1: 10 ether,
+                recipient: recipient,
+                recipientNFT: address(nftRecipient),
+                deadline: block.timestamp,
+                swapSourceToken: IERC20(address(0)),
+                amountIn0: 0,
+                amountOut0Min: 0,
+                swapData0: "",
+                amountIn1: 0,
+                amountOut1Min: 0,
+                swapData1: "",
+                minLiquidity: 15 ether,
+                returnData: returnData,
+                unwrap: false,
+                permitData: ""
+            })
+        );
+        vm.stopPrank();
+
+        assertEq(positions.ownerOf(tokenId), address(nftRecipient));
+        assertEq(nftRecipient.tokenId(), tokenId);
+        assertEq(nftRecipient.data(), returnData);
     }
 
     function testOwnerCanIncreaseByDirectNftTransferWithoutNftApproval() external {

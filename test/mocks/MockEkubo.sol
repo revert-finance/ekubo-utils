@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -40,6 +41,23 @@ contract MockEkuboPositions is ERC721 {
         id = nextId++;
         positionState[id] = state;
         _mint(to, id);
+    }
+
+    /// @dev Mirrors Ekubo Positions, which requires the receiver callback even
+    /// when `to` has no code. This differs from standard ERC721 safe transfers
+    /// and keeps the utility's EOA return path covered by unit tests.
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 tokenId,
+        bytes memory data
+    ) public override {
+        transferFrom(from, to, tokenId);
+        require(
+            IERC721Receiver(to).onERC721Received(msg.sender, from, tokenId, data)
+                == IERC721Receiver.onERC721Received.selector,
+            "unsafe recipient"
+        );
     }
 
     function seedFees(

@@ -28,8 +28,10 @@ contract EkuboMainnetForkTest is Test {
 
         assertGt(address(POSITIONS).code.length, 0);
         assertGt(CORE.code.length, 0);
-        (uint128 liquidity,,,,) = POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
-        assertGt(liquidity, 0);
+        // The referenced position may be fully withdrawn after this fixture is
+        // published. The external call succeeding still proves the production
+        // ABI and packed pool key remain compatible.
+        POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
     }
 
     function testMainnetDepositUsesPositionsAllowanceAndReturnsNft() external {
