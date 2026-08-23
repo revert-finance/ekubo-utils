@@ -24,6 +24,8 @@ contract EkuboMainnetForkTest is Test {
     bytes32 internal constant DEPLOYED_UTILS_RUNTIME_HASH =
         0xd5a7a45ad7f624e63c5c92dc7391ffc2d1643513e8b559b1dee86ca02025c98e;
     uint256 internal constant TOKEN_ID = 115405844744126724027399150793600264461049412098266383761154101033925042376216;
+    uint256 internal constant POSITION_FIXTURE_BLOCK = 25_686_351;
+    uint128 internal constant POSITION_FIXTURE_LIQUIDITY = 4_442_895_120_273;
 
     struct ZeroXQuote {
         uint256 amountIn;
@@ -34,14 +36,13 @@ contract EkuboMainnetForkTest is Test {
     function testMainnetPositionAbiAndPoolConfig() external {
         string memory rpcUrl = _mainnetRpcUrl();
         if (bytes(rpcUrl).length == 0) return;
-        vm.createSelectFork(rpcUrl);
+        vm.createSelectFork(rpcUrl, POSITION_FIXTURE_BLOCK);
 
         assertGt(address(POSITIONS).code.length, 0);
         assertGt(CORE.code.length, 0);
         assertTrue(POSITIONS.ownerOf(TOKEN_ID) != address(0));
-        // This historical NFT may be emptied after the test is published. A successful
-        // decode still verifies the live Positions ABI and the canonical pool-key shape.
-        POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
+        (uint128 liquidity,,,,) = POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
+        assertEq(liquidity, POSITION_FIXTURE_LIQUIDITY);
     }
 
     function testMainnetDepositUsesPositionsAllowanceAndReturnsNft() external {
@@ -155,15 +156,19 @@ contract EkuboMainnetForkTest is Test {
     }
 
     /// @notice Runs a complete position lifecycle against the verified production runtime.
-    /// @dev Requires MAINNET_RPC_URL and --ffi because every swap leg uses a fresh firm quote
-    ///      from the same Revert 0x proxy used by the SPA. No contract is deployed or mocked.
+    /// @dev Requires MAINNET_RPC_URL, EKUBO_LIVE_ZEROX=true, and --ffi because every swap leg
+    ///      uses a fresh firm quote from the Revert 0x proxy used by the SPA. No contract is deployed or mocked.
     function testMainnetDeployedUtilsThirdTokenLifecycle() external {
         string memory rpcUrl = _mainnetRpcUrl();
-        if (bytes(rpcUrl).length == 0) return;
+        if (bytes(rpcUrl).length == 0 || !_liveZeroXEnabled()) return;
         vm.createSelectFork(rpcUrl);
 
         assertEq(address(DEPLOYED_UTILS).code.length, 23_397);
         assertEq(keccak256(address(DEPLOYED_UTILS).code), DEPLOYED_UTILS_RUNTIME_HASH);
+
+        uint256 utilsBalanceBefore0 = IERC20(WBTC).balanceOf(address(DEPLOYED_UTILS));
+        uint256 utilsBalanceBefore1 = IERC20(CBBTC).balanceOf(address(DEPLOYED_UTILS));
+        uint256 utilsBalanceBeforeWeth = IERC20(WETH).balanceOf(address(DEPLOYED_UTILS));
 
         address owner = vm.addr(0xA11CE);
         EkuboUtils.PositionSpec memory original =
@@ -317,9 +322,9 @@ contract EkuboMainnetForkTest is Test {
         assertGt(movedLiquidity, 0, "move must fund the new range");
         assertEq(POSITIONS.ownerOf(tokenId), owner, "move must return the old NFT");
         assertEq(POSITIONS.ownerOf(newTokenId), owner, "move must return the new NFT");
-        assertEq(IERC20(WBTC).balanceOf(address(DEPLOYED_UTILS)), 0);
-        assertEq(IERC20(CBBTC).balanceOf(address(DEPLOYED_UTILS)), 0);
-        assertEq(IERC20(WETH).balanceOf(address(DEPLOYED_UTILS)), 0);
+        assertEq(IERC20(WBTC).balanceOf(address(DEPLOYED_UTILS)), utilsBalanceBefore0);
+        assertEq(IERC20(CBBTC).balanceOf(address(DEPLOYED_UTILS)), utilsBalanceBefore1);
+        assertEq(IERC20(WETH).balanceOf(address(DEPLOYED_UTILS)), utilsBalanceBeforeWeth);
         assertEq(IERC20(WBTC).allowance(address(DEPLOYED_UTILS), ZEROX_ALLOWANCE_HOLDER), 0);
         assertEq(IERC20(CBBTC).allowance(address(DEPLOYED_UTILS), ZEROX_ALLOWANCE_HOLDER), 0);
     }
@@ -409,6 +414,12 @@ contract EkuboMainnetForkTest is Test {
     function _mainnetRpcUrl() internal returns (string memory rpcUrl) {
         try vm.envString("MAINNET_RPC_URL") returns (string memory configuredUrl) {
             rpcUrl = configuredUrl;
+        } catch {}
+    }
+
+    function _liveZeroXEnabled() internal returns (bool enabled) {
+        try vm.envBool("EKUBO_LIVE_ZEROX") returns (bool configured) {
+            enabled = configured;
         } catch {}
     }
 
