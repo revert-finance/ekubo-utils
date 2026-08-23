@@ -38,8 +38,10 @@ contract EkuboMainnetForkTest is Test {
 
         assertGt(address(POSITIONS).code.length, 0);
         assertGt(CORE.code.length, 0);
-        (uint128 liquidity,,,,) = POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
-        assertGt(liquidity, 0);
+        assertTrue(POSITIONS.ownerOf(TOKEN_ID) != address(0));
+        // This historical NFT may be emptied after the test is published. A successful
+        // decode still verifies the live Positions ABI and the canonical pool-key shape.
+        POSITIONS.getPositionFeesAndLiquidity(TOKEN_ID, _poolKey(), 0, 450);
     }
 
     function testMainnetDepositUsesPositionsAllowanceAndReturnsNft() external {
