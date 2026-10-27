@@ -23,8 +23,14 @@ Ekubo is a singleton concentrated-liquidity AMM with extensions. It is not a
 Uniswap fork. Do not infer its authorization, pool, position, fee, accounting,
 or callback behavior from Uniswap.
 
-Only canonical concentrated pools with no extension are supported. Stableswap
-and extension pools are intentionally rejected.
+Canonical concentrated pools and the pinned Ethereum Fynd SignedExclusiveSwap extension
+`0x55b703eed01b35641963da2fb2e14885993605a3` with zero base fee are supported.
+All other extensions, nonzero-base-fee Fynd pools, non-Ethereum Fynd configurations,
+and stableswap pools are rejected. The Fynd controller is trusted for swap pricing,
+not NFT custody. Its verified callbacks distribute saved fees before liquidity changes
+and collection. Clients must simulate accumulation before reading claimable fees;
+the plain Positions getter omits pending extension fees. This support requires a
+new utility deployment; the existing deployment rejects extension pools.
 
 The implementation used Revert's current V3Utils security model as a design
 reference:

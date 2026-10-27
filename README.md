@@ -4,8 +4,9 @@ Standalone Ekubo v3.2.0 position utility, designed from the current Revert `V3Ut
 Ekubo prototype.
 
 The contract supports swaps, swap-and-mint, owner-initiated swap-and-increase via direct NFT transfer, compounding,
-range changes, and withdraw/collect/swap for canonical concentrated pools on Ekubo. Extension and stableswap pools
-are deliberately rejected.
+range changes, and withdraw/collect/swap for canonical concentrated pools on Ekubo. The pinned Ethereum Fynd
+SignedExclusiveSwap extension with zero base fee is also supported. All other extensions and stableswap pools
+are rejected.
 
 Security-relevant design choices:
 
@@ -35,6 +36,18 @@ git clone --recurse-submodules https://github.com/revert-finance/ekubo-utils.git
 Security reviewers should read [AUDIT_CONTEXT.md](AUDIT_CONTEXT.md) for the
 threat model, trust boundaries, invariants, accepted limitations, and expected
 audit output.
+
+## Fynd fork validation
+
+The Fynd suite requires a configured mainnet RPC and never silently skips:
+
+```sh
+MAINNET_RPC_URL=http://127.0.0.1:19545 forge test --match-contract 'FyndMainnetForkTest|EkuboUtilsTest' -vv
+```
+
+It uses real deployed protocol contracts with synthetic, custody-backed saved fees.
+No production transaction is submitted. A new utility deployment is required for Fynd;
+`0x4cf798c93280e2103ae1186b4d4ab7e9ce93df9f` rejects extension pools.
 
 ## Direct NFT actions
 
