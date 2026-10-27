@@ -13,13 +13,16 @@ import {IWETH9} from "./interfaces/IWETH9.sol";
 
 /// @title EkuboUtils
 /// @notice Stateless utility for swapping, creating, and managing canonical Ekubo concentrated-liquidity positions.
-/// @dev Position NFTs are held only for the duration of an operation. Extensions and stableswap pools are unsupported.
+/// @dev Position NFTs are held only for the duration of an operation. Only the pinned Ethereum Fynd extension is supported.
 contract EkuboUtils is RouterSwapper, IERC721Receiver {
     using SafeERC20 for IERC20;
 
     int32 internal constant MIN_TICK = -88_722_835;
     int32 internal constant MAX_TICK = 88_722_835;
     uint32 internal constant MAX_TICK_SPACING = 698_605;
+
+    // Verified SignedExclusiveSwap deployment; its callbacks distribute fees before liquidity changes/collection.
+    address public constant FYND_EXTENSION = 0x55b703eED01b35641963da2FB2E14885993605A3;
 
     IEkuboPositions public immutable positions;
     address public immutable core;
@@ -841,7 +844,13 @@ contract EkuboUtils is RouterSwapper, IERC721Receiver {
         if (poolKey.token0 >= poolKey.token1) revert InvalidPool();
 
         uint256 config = uint256(poolKey.config);
-        if (config >> 96 != 0) revert ExtensionsNotSupported();
+        address extension = address(uint160(config >> 96));
+        if (extension != address(0)) {
+            // No generic extension opt-in: unknown callbacks and nonzero base-fee variants remain unsupported.
+            if (block.chainid != 1 || extension != FYND_EXTENSION || uint64(config >> 32) != 0) {
+                revert ExtensionsNotSupported();
+            }
+        }
         if ((config & 0x80000000) == 0) revert StableswapNotSupported();
         uint256 spacing = config & 0x7fffffff;
         // The config mask bounds this conversion well below int256.max.

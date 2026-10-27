@@ -26,7 +26,12 @@ jobs:
         run: forge lint
 
       - name: Test
-        run: forge test -vv
+        run: forge test --no-match-contract FyndMainnetForkTest -vv
+
+      - name: Fynd mainnet fork (required)
+        env:
+          MAINNET_RPC_URL: https://ethereum-rpc.publicnode.com
+        run: forge test --match-contract FyndMainnetForkTest -vv
 
       - name: Check contract sizes
         run: forge build --sizes

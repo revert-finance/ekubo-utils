@@ -629,6 +629,20 @@ contract EkuboUtilsTest is Test {
         utils.swapAndMint(params);
     }
 
+    function testFyndRejectsWrongChainAndNonzeroBaseFee() external {
+        EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
+        params.position.poolKey.config = bytes32(uint256(uint160(utils.FYND_EXTENSION())) << 96 | uint256(0x80000001));
+        vm.chainId(10);
+        vm.prank(owner);
+        vm.expectRevert(EkuboUtils.ExtensionsNotSupported.selector);
+        utils.swapAndMint(params);
+        vm.chainId(1);
+        params.position.poolKey.config |= bytes32(uint256(1) << 32);
+        vm.prank(owner);
+        vm.expectRevert(EkuboUtils.ExtensionsNotSupported.selector);
+        utils.swapAndMint(params);
+    }
+
     function testDeadlineIsEnforced() external {
         vm.warp(100);
         EkuboUtils.SwapAndMintParams memory params = _emptyMintParams();
