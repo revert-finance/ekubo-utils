@@ -39,7 +39,7 @@ contract FyndMainnetForkTest is Test {
     uint256 private initialNativeBalance;
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
+        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 26_286_322);
         assertEq(block.chainid, 1);
         assertGt(EXT.code.length, 0);
         fynd = new EkuboUtils(

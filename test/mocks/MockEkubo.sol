@@ -131,7 +131,9 @@ contract MockEkuboPositions is ERC721 {
         results = new bytes[](data.length);
         for (uint256 i; i < data.length; ++i) {
             (bool success, bytes memory result) = address(this).delegatecall(data[i]);
-            if (!success) assembly ("memory-safe") { revert(add(result, 32), mload(result)) }
+            if (!success) {
+                assembly ("memory-safe") { revert(add(result, 32), mload(result)) }
+            }
             results[i] = result;
         }
     }
